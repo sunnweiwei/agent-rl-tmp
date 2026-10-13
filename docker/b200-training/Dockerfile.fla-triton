@@ -1,0 +1,41 @@
+FROM sunnweiwei/verl-qwen35:b200-verl0.8.0-vllm-main-c621af169-fla051-triton-gdn-20260716
+
+# Keep the B200-validated Triton training path and use FLA 0.5.1's fused
+# KKT + solve_tril + recompute_w_u prefill kernel in vLLM.
+ENV FLA_TILELANG=0
+
+COPY docker/b200-training/vllm-fla051-fused-gdn.patch /tmp/vllm-fla051-fused-gdn.patch
+RUN patch -p1 -d /opt/vllm < /tmp/vllm-fla051-fused-gdn.patch \
+    && rm /tmp/vllm-fla051-fused-gdn.patch \
+    && python -c "import inspect; import fla; from fla.ops.gated_delta_rule import chunk_gated_delta_rule; from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import fla051_fused_chunk_gated_delta_rule; assert fla.__version__ == '0.5.1'; assert 'cu_seqlens' in inspect.signature(chunk_gated_delta_rule).parameters; assert callable(fla051_fused_chunk_gated_delta_rule)"
+
+# Colocated RL repeatedly sleeps vLLM, wakes weights for LoRA sync, then wakes
+# KV cache. Keep the scheduler paused during the partial wake and synchronize
+# CUDA before unmapping/restoring CuMem allocations. Without these barriers,
+# an in-flight graph can access unmapped memory and raise Xid 31.
+COPY docker/b200-training/vllm-rl-sleep-wake.patch /tmp/vllm-rl-sleep-wake.patch
+RUN patch -p1 -d /opt/vllm < /tmp/vllm-rl-sleep-wake.patch \
+    && rm /tmp/vllm-rl-sleep-wake.patch \
+    && python - <<'PY'
+from pathlib import Path
+
+cumem_source = Path("/opt/vllm/vllm/device_allocator/cumem.py").read_text()
+core_source = Path("/opt/vllm/vllm/v1/engine/core.py").read_text()
+assert cumem_source.count("torch.cuda.synchronize(") >= 3
+assert "if not self.model_executor.is_sleeping" in core_source
+PY
+
+# Packed LoRA batches can exceed 2^31 bytes per projection. Promote row indices
+# before Triton computes pointers so the optimized expand kernel remains valid
+# up to the configured 131K-token rollout batch.
+COPY docker/b200-training/vllm-lora-int64-row-index.patch /tmp/vllm-lora-int64-row-index.patch
+RUN patch -p1 -d /opt/vllm < /tmp/vllm-lora-int64-row-index.patch \
+    && rm /tmp/vllm-lora-int64-row-index.patch \
+    && python - <<'PY'
+from pathlib import Path
+
+source = Path(
+    "/opt/vllm/vllm/lora/ops/triton_ops/lora_expand_op.py"
+).read_text()
+assert "tl.load(cta_lora_seq_indices + offset_m).to(tl.int64)" in source
+PY

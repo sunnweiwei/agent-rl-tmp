@@ -1,0 +1,45 @@
+diff --git a/vllm/device_allocator/cumem.py b/vllm/device_allocator/cumem.py
+index c30790d..e86f70a 100644
+--- a/vllm/device_allocator/cumem.py
++++ b/vllm/device_allocator/cumem.py
+@@ -183,6 +183,11 @@ class CuMemAllocator:
+ 
+         assert isinstance(offload_tags, tuple)
+ 
++        # The scheduler pause is asynchronous. Drain device work before a
++        # D2H backup or cuMemUnmap can invalidate an in-flight kernel's pages.
++        if libcudart is not None:
++            torch.cuda.synchronize()
++
+         total_bytes = 0
+         backup_bytes = 0
+ 
+@@ -240,6 +245,11 @@ class CuMemAllocator:
+                         libcudart.cudaMemcpy(ptr, cpu_ptr, size_in_bytes)
+                         data.cpu_backup_tensor = None
+ 
++        # Do not expose restored allocations until all H2D work and implicit
++        # stream activity has completed on this worker.
++        if libcudart is not None:
++            torch.cuda.synchronize()
++
+     @contextmanager
+     def use_memory_pool(self, tag: str | None = None):
+         """
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 08c814a..45d06b7 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -782,8 +782,10 @@ class EngineCore:
+         if tags is None or tags:
+             self.model_executor.wake_up(tags)
+ 
+-        # Resume scheduling (applies to all levels)
+-        self.resume_scheduler()
++        # A weights-only wake leaves KV cache unmapped. Resume only after the
++        # final wake has made every forward-visible allocation resident.
++        if not self.model_executor.is_sleeping:
++            self.resume_scheduler()
+ 
+     def is_sleeping(self) -> bool:
+         """Check if engine is sleeping at any level."""

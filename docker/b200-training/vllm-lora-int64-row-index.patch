@@ -1,0 +1,16 @@
+diff --git a/vllm/lora/ops/triton_ops/lora_expand_op.py b/vllm/lora/ops/triton_ops/lora_expand_op.py
+index f064496..726fe96 100644
+--- a/vllm/lora/ops/triton_ops/lora_expand_op.py
++++ b/vllm/lora/ops/triton_ops/lora_expand_op.py
+@@ -96,7 +96,10 @@ def _lora_expand_kernel(
+
+     # Load all relevant row indices.
+     offset_m = tl.arange(0, BLOCK_M) % cta_m_len
+-    ram = tl.load(cta_lora_seq_indices + offset_m)
++    # Keep row-stride address arithmetic in 64 bits. For wide projections,
++    # such as Qwen3.6-27B's 34,816-column gate/up output, int32 overflows once
++    # a packed batch exceeds 61,680 tokens and produces an illegal address.
++    ram = tl.load(cta_lora_seq_indices + offset_m).to(tl.int64)
+
+     do_expand_kernel(
+         pid_n,

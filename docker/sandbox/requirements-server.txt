@@ -1,0 +1,5 @@
+# Sandbox server dependencies
+fastapi
+uvicorn[standard]
+pydantic
+pyyaml

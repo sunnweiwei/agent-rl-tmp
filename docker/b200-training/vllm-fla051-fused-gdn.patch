@@ -1,0 +1,85 @@
+diff --git a/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py b/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+index 64e8d7f..ca6ad39 100644
+--- a/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
++++ b/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+@@ -256,5 +256,61 @@ def fi_chunk_gated_delta_rule(
+         return result.unsqueeze(0), None
+ 
+ 
++def fla051_fused_chunk_gated_delta_rule(
++    q: torch.Tensor,
++    k: torch.Tensor,
++    v: torch.Tensor,
++    g: torch.Tensor,
++    beta: torch.Tensor,
++    initial_state: torch.Tensor,
++    output_final_state: bool,
++    cu_seqlens: torch.Tensor | None = None,
++    chunk_indices: torch.Tensor | None = None,
++    use_qk_l2norm_in_kernel: bool = True,
++    core_attn_out: torch.Tensor | None = None,
++):
++    """Run FLA 0.5.1's fused GDN intra-chunk prefill kernel.
++
++    Qwen3.5/3.6 keeps recurrent state in [N, H, V, K] order, hence
++    state_v_first=True. vLLM precomputes chunk_indices in its metadata builder;
++    reusing them avoids a GPU-to-CPU synchronization in every GDN layer.
++    """
++    from fla.modules.l2norm import l2norm_fwd as fla051_l2norm_fwd
++    from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_fwd as fla051_chunk_gated_delta_rule_fwd
++    from fla.ops.utils.index import prepare_chunk_indices as fla051_prepare_chunk_indices
++
++    if use_qk_l2norm_in_kernel:
++        q, _ = fla051_l2norm_fwd(q)
++        k, _ = fla051_l2norm_fwd(k)
++
++    if cu_seqlens is not None and chunk_indices is None:
++        chunk_indices = fla051_prepare_chunk_indices(cu_seqlens, 64)
++
++    _, output, _, final_state, _, _ = fla051_chunk_gated_delta_rule_fwd(
++        q=q,
++        k=k,
++        v=v,
++        g=g,
++        beta=beta,
++        scale=k.shape[-1] ** -0.5,
++        initial_state=initial_state,
++        output_final_state=output_final_state,
++        state_v_first=True,
++        cu_seqlens=cu_seqlens,
++        chunk_indices=chunk_indices,
++    )
++
++    output = output.to(q.dtype)
++    if core_attn_out is not None:
++        assert not torch.is_grad_enabled(), (
++            "core_attn_out buffer reuse is only supported for inference"
++        )
++        output_flat = output.reshape(-1)
++        core_flat = core_attn_out.reshape(-1)
++        core_flat[: output_flat.numel()].copy_(output_flat)
++        output = core_flat[: output_flat.numel()].view_as(output)
++    return output, final_state
++
++
+ @CustomOp.register("chunk_gated_delta_rule")
+ class ChunkGatedDeltaRule(CustomOp):
+@@ -352,17 +408,16 @@ class ChunkGatedDeltaRule(CustomOp):
+         use_qk_l2norm_in_kernel: bool = True,
+         core_attn_out: torch.Tensor | None = None,
+     ):
+-        return fla_chunk_gated_delta_rule(
++        return fla051_fused_chunk_gated_delta_rule(
+             q=q,
+             k=k,
+             v=v,
+             g=g,
+             beta=beta,
+             initial_state=initial_state,
+             output_final_state=output_final_state,
+             cu_seqlens=cu_seqlens,
+             chunk_indices=chunk_indices,
+-            chunk_offsets=chunk_offsets,
+             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+             core_attn_out=core_attn_out,
+         )

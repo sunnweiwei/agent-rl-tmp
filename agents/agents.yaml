@@ -1,0 +1,22 @@
+# Agent-loop config passed to every AgentHubLoop worker. Keys other than
+# name/_target_ become agent_options; extra_info in a dataset row overrides
+# any option for that sample.
+- name: agent_hub
+  _target_: agents.base_agent.AgentHubLoop
+  default_agent: math
+  sandbox_url: ${oc.env:SANDBOX_MANAGER_URL,http://127.0.0.1:8084}
+  sandbox_profile: ${oc.env:SANDBOX_PROFILE,nsjail}
+  max_turns: ${oc.env:AGENT_MAX_TURNS,100}
+  max_calls_per_turn: ${oc.env:AGENT_MAX_CALLS_PER_TURN,10}
+  tool_timeout: ${oc.env:AGENT_TOOL_TIMEOUT,120}
+  tool_total_budget: ${oc.env:AGENT_TOOL_TOTAL_BUDGET,1800}
+  max_observation_chars: ${oc.env:AGENT_MAX_OBSERVATION_CHARS,16000}
+  max_turn_observation_chars: ${oc.env:AGENT_MAX_TURN_OBSERVATION_CHARS,48000}
+  process_rewards_enabled: ${oc.env:PROCESS_REWARDS_ENABLED,false}
+  parse_error_penalty: ${oc.env:PARSE_ERROR_PENALTY,0.25}
+  tool_error_penalty: ${oc.env:TOOL_ERROR_PENALTY,0.05}
+  tool_timeout_penalty: ${oc.env:TOOL_TIMEOUT_PENALTY,0.05}
+  action_error_penalty_cap: ${oc.env:ACTION_ERROR_PENALTY_CAP,0.5}
+  context_penalty_buffer_tokens: ${oc.env:CONTEXT_PENALTY_BUFFER_TOKENS,8192}
+  context_penalty_max: ${oc.env:CONTEXT_PENALTY_MAX,0.0}
+  trajectory_trace_path: ${oc.env:TRAJECTORY_TRACE_PATH,""}

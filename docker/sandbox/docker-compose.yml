@@ -1,0 +1,72 @@
+# Sandbox server
+# Usage:
+#   SANDBOX_TASK_ROOT=/path/to/tasks SANDBOX_API_TOKEN=$(openssl rand -hex 32) \
+#     docker compose -f docker/sandbox/docker-compose.yml up -d --build
+
+services:
+  sandbox_worker:
+    build:
+      context: ../..
+      dockerfile: docker/sandbox/Dockerfile
+    command:
+      - python
+      - -m
+      - uvicorn
+      - sandbox_server.server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --backlog
+      - "${SANDBOX_UVICORN_BACKLOG:-16384}"
+      - --loop
+      - uvloop
+      - --http
+      - httptools
+      - --timeout-keep-alive
+      - "${SANDBOX_UVICORN_KEEPALIVE_TIMEOUT:-60}"
+      - --no-access-log
+    ports:
+      - "${SANDBOX_PORT:-8084}:8080"
+    mem_limit: ${SANDBOX_WORKER_MEM_LIMIT:-256g}
+    memswap_limit: ${SANDBOX_WORKER_MEMSWAP_LIMIT:-256g}
+    ulimits:
+      nofile:
+        soft: ${SANDBOX_NOFILE_SOFT:-1048576}
+        hard: ${SANDBOX_NOFILE_HARD:-1048576}
+    # nsjail needs these capabilities to create namespaces
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    devices:
+      - /dev/null
+      - /dev/zero
+      - /dev/random
+      - /dev/urandom
+    volumes:
+      # Task directories — read-only
+      - ${SANDBOX_TASK_ROOT:?set SANDBOX_TASK_ROOT}:/opt/sandbox/tasks:ro
+      # Trial workspaces — writable, on fast storage
+      - sandbox-workspaces:/var/sandbox/workspaces
+    environment:
+      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-4}
+      - MALLOC_TRIM_THRESHOLD_=${MALLOC_TRIM_THRESHOLD_:-131072}
+      - MALLOC_MMAP_THRESHOLD_=${MALLOC_MMAP_THRESHOLD_:-131072}
+      - SANDBOX_MAX_LIVE_TRIALS=${SANDBOX_MAX_LIVE_TRIALS:-20000}
+      - SANDBOX_MAX_RUNNING_ACTIONS=${SANDBOX_MAX_RUNNING_ACTIONS:-1024}
+      - SANDBOX_MAX_QUEUED_ACTIONS=${SANDBOX_MAX_QUEUED_ACTIONS:-50000}
+      - SANDBOX_TOOL_MAX_RUNNING_ACTIONS=${SANDBOX_TOOL_MAX_RUNNING_ACTIONS:-bash:512,execute_python:512}
+      - SANDBOX_REWARD_TIMEOUT_SECONDS=${SANDBOX_REWARD_TIMEOUT_SECONDS:-600}
+      - SANDBOX_THREAD_POOL_WORKERS=${SANDBOX_THREAD_POOL_WORKERS:-256}
+      - SANDBOX_MEMORY_SOFT_LIMIT=${SANDBOX_MEMORY_SOFT_LIMIT:-192g}
+      - SANDBOX_MEMORY_TRIM_THRESHOLD=${SANDBOX_MEMORY_TRIM_THRESHOLD:-64g}
+      - SANDBOX_API_TOKEN=${SANDBOX_API_TOKEN:-}
+      - SANDBOX_ENABLED_PROFILES=nsjail
+      - SANDBOX_ALLOW_UNSAFE_SUBPROCESS=0
+    restart: unless-stopped
+
+volumes:
+  sandbox-workspaces:
